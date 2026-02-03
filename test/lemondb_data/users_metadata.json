@@ -3,6 +3,7 @@
     "username": "string",
     "email": "string",
     "age": "integer",
-    "premium": "boolean"
+    "premium": "boolean",
+    "signup_date": "date"
   }
 }
