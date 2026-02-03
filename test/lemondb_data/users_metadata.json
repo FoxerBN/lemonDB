@@ -1,0 +1,8 @@
+{
+  "schema": {
+    "username": "string",
+    "email": "string",
+    "age": "integer",
+    "premium": "boolean"
+  }
+}
