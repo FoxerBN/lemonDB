@@ -1,9 +1,19 @@
 import os
 import json
-import csv
 from datetime import datetime
 
 DATA_DIR = "lemondb_data"
+
+
+def set_data_dir(path: str):
+    """Set custom data directory path"""
+    global DATA_DIR
+    DATA_DIR = path
+
+
+def get_data_dir() -> str:
+    """Get current data directory path"""
+    return DATA_DIR
 
 
 def ensure_data_dir():
@@ -40,9 +50,7 @@ def stringify(value):
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, (datetime,)):
+    if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d")
     return str(value)
 
@@ -50,20 +58,16 @@ def stringify(value):
 def parse_value(value: str, dtype: str):
     if value == "":
         return None
+    
+    parsers = {
+        "string": lambda v: v,
+        "integer": int,
+        "float": float,
+        "boolean": lambda v: v.lower() in ("1", "true", "yes", "y"),
+        "date": lambda v: datetime.strptime(v, "%Y-%m-%d").date()
+    }
+    
     try:
-        if dtype == "string":
-            return value
-        if dtype == "integer":
-            return int(value)
-        if dtype == "float":
-            return float(value)
-        if dtype == "boolean":
-            lower = value.lower()
-            return lower in ("1", "true", "yes", "y")
-        if dtype == "date":
-            return datetime.strptime(value, "%Y-%m-%d").date()
+        return parsers.get(dtype, str)(value)
     except Exception:
-        # on parse error return raw string
         return value
-    return value
-

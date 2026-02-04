@@ -47,7 +47,12 @@ class CSVEngine:
     def _wire_row(self, row: List[str]) -> Dict[str, Any]:
         out = {}
         for i, fname in enumerate(self.fields):
-            dtype = self.schema.get(fname, "string")
+            schema_def = self.schema.get(fname, "string")
+            # Handle both simple string type and dict with type key
+            if isinstance(schema_def, dict):
+                dtype = schema_def.get("type", "string")
+            else:
+                dtype = schema_def
             val = row[i] if i < len(row) else ""
             out[fname] = parse_value(val, dtype)
         return out
@@ -57,60 +62,54 @@ class CSVEngine:
         return [self._wire_row(r) for r in rows]
 
     def find(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
-        all_rows = self.find_all()
+        return [row for row in self.find_all() if self._matches_query(row, query)]
 
-        def matches(item):
-            for k, v in query.items():
-                if item.get(k) != v:
-                    return False
-            return True
-
-        return [r for r in all_rows if matches(r)]
+    def _matches_query(self, row: Dict[str, Any], query: Dict[str, Any]) -> bool:
+        return all(row.get(key) == value for key, value in query.items())
 
     def count(self) -> int:
         return len(self._read_all_rows())
 
     def delete_all(self):
-        # remove csv file and recreate header
         if os.path.exists(self.csv_file):
             os.remove(self.csv_file)
-        with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(self.fields)
+        self._write_rows([])
 
     def delete_one(self, query: Dict[str, Any]) -> bool:
         rows = self._read_all_rows()
         remaining = []
         deleted = False
+        
         for row in rows:
             obj = self._wire_row(row)
-            if not deleted and all(obj.get(k) == v for k, v in query.items()):
+            if not deleted and self._matches_query(obj, query):
                 deleted = True
                 continue
             remaining.append(row)
-        # write back
-        with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(self.fields)
-            writer.writerows(remaining)
+        
+        self._write_rows(remaining)
         return deleted
 
     def update_one(self, query: Dict[str, Any], data: Dict[str, Any]) -> bool:
         rows = self._read_all_rows()
         updated = False
         new_rows = []
+        
         for row in rows:
             obj = self._wire_row(row)
-            if not updated and all(obj.get(k) == v for k, v in query.items()):
-                # apply updates
+            if not updated and self._matches_query(obj, query):
                 for key, val in data.items():
                     if key in self.fields:
                         idx = self.fields.index(key)
                         row[idx] = stringify(val)
                 updated = True
             new_rows.append(row)
+        
+        self._write_rows(new_rows)
+        return updated
+
+    def _write_rows(self, rows: List[List[str]]):
         with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(self.fields)
-            writer.writerows(new_rows)
-        return updated
+            writer.writerows(rows)

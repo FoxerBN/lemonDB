@@ -1,278 +1,490 @@
-lemonDB - Documentation
+# 🍋 lemonDB Documentation
 
-Project overview
+> A lightweight, file-backed, schema-aware database in Python
 
-lemonDB is a tiny, file-backed, schema-aware toy database implemented in Python. It stores records in CSV files under a local data directory (`lemondb_data`) and keeps collection metadata (currently only the schema) as a JSON file per collection.
+---
 
-This repo contains four main modules under `app/`:
-- `core` — high-level user-facing API (LemonDB class) that validates against a schema and delegates persistence to an engine.
-- `engine` — the storage engine implementation; this project ships a `CSVEngine` that reads/writes CSV files and manages headers.
-- `schema` — schema validation utilities (allowed types, record validation).
-- `utils` — filesystem helpers, metadata read/write, and conversion helpers (stringify/parse).
+## 📚 Table of Contents
 
-This document explains each module, the public API, storage format, examples, edge cases, and suggested next steps.
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+3. [Quick Start](#quick-start)
+4. [API Reference](#api-reference)
+5. [Examples](#examples)
+6. [Limitations](#limitations)
 
-Quickstart example
+---
 
-1. Define a schema (dict: field -> type):
+## Overview
+
+**lemonDB** is a simple CSV-based database with schema validation. Perfect for small projects, prototypes, and learning.
+
+**Key Features:**
+- ✅ Schema validation with types (string, integer, float, boolean, date)
+- ✅ Constraints: `required` and `unique` fields
+- ✅ Simple CRUD operations
+- ✅ Custom storage paths
+- ✅ Helpful logging with 🍋 icons
+
+**Storage:**
+- Data: CSV files (one per collection)
+- Metadata: JSON files (schema definitions)
+- Default location: `./lemondb_data/`
+
+---
+
+## Architecture
+
+### Component Structure
+
+```
+┌─────────────────────────────────────────────────┐
+│  LemonDB (core.py)                              │
+│  ↓ User-facing API                              │
+│  • save(), find(), delete(), update()           │
+│  • Orchestrates validation & persistence        │
+└──────────────┬──────────────────────────────────┘
+               ↓
+┌──────────────┴──────────────────────────────────┐
+│  SchemaValidator (schema.py)                    │
+│  ↓ Validation layer                             │
+│  • Type checking                                │
+│  • Constraint enforcement (required, unique)    │
+└──────────────┬──────────────────────────────────┘
+               ↓
+┌──────────────┴──────────────────────────────────┐
+│  CSVEngine (engine.py)                          │
+│  ↓ Persistence layer                            │
+│  • File I/O operations                          │
+│  • Query matching                               │
+│  • Type conversion (CSV ↔ Python)               │
+└──────────────┬──────────────────────────────────┘
+               ↓
+┌──────────────┴──────────────────────────────────┐
+│  Utils (utils.py)                               │
+│  • Path management                              │
+│  • Data serialization                           │
+└─────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+**Save Operation:**
+```
+User → LemonDB.save() → Validate format → Check constraints → CSVEngine.save() → File
+```
+
+**Find Operation:**
+```
+File → CSVEngine.find() → Parse & type → Filter by query → Return results
+```
+
+---
+
+## Quick Start
+
+### Basic Usage
 
 ```python
+from app import LemonDB
+
+# Define schema
 schema = {
     "username": "string",
     "email": "string",
-    "age": "integer",
-    "premium": "boolean",
-    "signup_date": "date",
+    "age": "integer"
 }
 
-from app import LemonDB
+# Create database
+db = LemonDB(name="users", schema=schema)
+# 🍋 Schema 'users' was created
 
-db = LemonDB(name="users", engine="csv", schema=schema)
+# Test connection
+db.test()
+# 🍋 DB 'users' is created and working!
+# 🍋 Current records: 0
+# 🍋 Schema fields: username, email, age
 
-user1 = ["Andrea Blinova", "adka95652@gmail.com", 23, True, "2023-08-15"]
+# Save records (as tuples/lists matching schema order)
+db.save(
+    ("Alice", "alice@example.com", 25),
+    ("Bob", "bob@example.com", 30)
+)
+# 🍋 Saved 2 record(s) to 'users'
 
-db.save(user1)
+# Find all
+users = db.findAll()
+# [{'username': 'Alice', 'email': 'alice@example.com', 'age': 25}, ...]
+
+# Query
+alice = db.find({"username": "Alice"})
+
+# Update
+db.updateOne({"username": "Alice"}, {"age": 26})
+# 🍋 Updated 1 record in 'users'
+
+# Delete
+db.deleteOne({"username": "Bob"})
+# 🍋 Deleted 1 record from 'users'
 ```
 
-2. The data will be written to `lemondb_data/users.csv` and `lemondb_data/users_metadata.json`.
+### Custom Storage Path
 
-Module: app.core
+```python
+db = LemonDB(
+    name="products",
+    schema={"name": "string", "price": "float"},
+    data_dir="/path/to/my/data"
+)
+# Files will be created at: /path/to/my/data/products.csv
+```
 
-Public symbol: LemonDB
+### Schema with Constraints
 
-Purpose
-- Provide a simple, familiar API for saving and querying records while enforcing a schema.
-- Delegate low-level persistence details to an engine implementation.
+```python
+schema = {
+    "id": {"type": "integer", "required": True, "unique": True},
+    "email": {"type": "string", "required": True, "unique": True},
+    "name": {"type": "string", "required": True},
+    "active": {"type": "boolean"}
+}
 
-Constructor
-- LemonDB(name: str, engine: str = "csv", schema: Optional[Dict[str, str]] = None)
-  - name: collection name; used to build data file paths
-  - engine: currently only "csv" is supported (ValueError if other)
-  - schema: mapping field -> type (allowed types described in `schema` module)
-  - Internally: creates a SchemaValidator and a CSVEngine instance.
+db = LemonDB(name="users", schema=schema)
 
-Methods
-- save(record: List[Any] | Dict[str, Any])
-  - Accepts either a list aligned with schema field order, or a dict of field->value.
-  - Validates record with SchemaValidator.validate_record (raises SchemaValidationError on mismatch).
-  - If a dict is provided, converts it to a list following the schema field order before delegating to the engine.
+# This will fail (missing required field)
+db.save((None, "test@example.com", "Test"))  # ❌ SchemaValidationError
 
-- findAll() -> List[Dict[str, Any]]
-  - Returns all records as a list of dicts (field -> typed value) by calling engine.find_all().
+# This will fail (duplicate unique field)
+db.save((1, "alice@test.com", "Alice", True))
+db.save((2, "alice@test.com", "Alice2", True))  # ❌ SchemaValidationError
+```
 
-- find(query: Dict[str, Any]) -> List[Dict[str, Any]]
-  - Returns matching records where all query key/value pairs are equal to record values.
+---
 
-- deleteOne(query: Dict[str, Any]) -> bool
-  - Deletes the first record matching the query and returns True if a deletion occurred.
+## API Reference
 
-- deleteAll()
-  - Removes all records for the collection (recreates CSV header).
+### Constructor
 
-- updateOne(query: Dict[str, Any], data: Dict[str, Any]) -> bool
-  - Finds the first matching record and applies in-place updates for fields present in data (only known fields). Returns True if at least one row was updated.
+```python
+LemonDB(name: str, engine: str = "csv", schema: dict, data_dir: str = None)
+```
 
-- count() -> int
-  - Returns the number of stored records (excluding header).
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | str | Yes | Collection name |
+| `schema` | dict | Yes | Field definitions (see below) |
+| `engine` | str | No | Storage engine (only "csv" supported) |
+| `data_dir` | str | No | Custom storage path (default: `./lemondb_data/`) |
 
-Notes and behavior
-- LemonDB performs schema validation before saving.
-- Errors raised by SchemaValidator (SchemaValidationError) or engine I/O propagate to callers.
+**Schema Format:**
+```python
+# Simple: field -> type
+schema = {
+    "username": "string",
+    "age": "integer"
+}
 
-Module: app.engine
+# Advanced: field -> options
+schema = {
+    "id": {"type": "integer", "required": True, "unique": True},
+    "email": {"type": "string", "unique": True}
+}
+```
 
-Public symbol: CSVEngine
+**Allowed Types:** `string`, `integer`, `float`, `boolean`, `date`
 
-Purpose
-- A simple CSV-backed engine that stores one collection per CSV file.
-- Manages a companion metadata JSON file that contains the schema and future metadata.
+---
 
-Constructor
-- CSVEngine(name: str, schema: Dict[str, str])
-  - Builds file paths (CSV and metadata) via utils.csv_path/metadata_path and ensures files/headers exist.
+### Methods
 
-Key internal attributes
-- name: collection name
-- schema: schema map
-- fields: list(schema.keys()) (header order)
-- csv_file: path to CSV file
-- meta_file: path to metadata JSON
+#### `save(*records, raise_on_error=True) -> int`
+Save one or more records.
 
-Important methods
-- _ensure_files():
-  - Writes metadata JSON if missing (writes {"schema": schema}).
-  - Creates the CSV file and writes the header row if missing.
+```python
+db.save(("Alice", 25))              # Single record
+db.save(("Alice", 25), ("Bob", 30)) # Multiple records
+```
 
-- save(record: List[Any])
-  - Appends a CSV row. Values are passed through `utils.stringify` to serialize booleans, numbers, and dates.
+**Returns:** Number of records saved  
+**Logs:** `🍋 Saved X record(s) to 'name'`
 
-- _read_all_rows() -> List[List[str]]
-  - Reads raw CSV rows (skips header). Returns list of rows as lists of strings.
+---
 
-- _wire_row(row: List[str]) -> Dict[str, Any]
-  - Combines a raw CSV row with `fields` and converts each cell to its typed Python value using `utils.parse_value`.
-  - If a row is shorter than the header, missing columns are treated as empty strings.
+#### `findAll() -> list[dict]`
+Get all records.
 
-- find_all() -> List[Dict[str, Any]]
-  - Returns all records as typed dicts by mapping _wire_row over read rows.
+```python
+all_users = db.findAll()
+# [{'username': 'Alice', 'age': 25}, ...]
+```
 
-- find(query: Dict[str, Any]) -> List[Dict[str, Any]]
-  - Returns records where every key in `query` equals the record's corresponding value.
-  - Comparison uses Python equality (==) on parsed Python types.
+---
 
-- count() -> int
-  - Returns number of data rows (skips header).
+#### `find(query: dict) -> list[dict]`
+Query records.
 
-- delete_all()
-  - Deletes the CSV file and recreates it with only the header row.
+```python
+results = db.find({"age": 25})
+results = db.find({"username": "Alice", "age": 25})
+```
 
-- delete_one(query: Dict[str, Any]) -> bool
-  - Iterates rows and deletes the first that matches the query. Writes remaining rows back and returns True if something was deleted. Matching uses typed values after `_wire_row`.
+---
 
-- update_one(query: Dict[str, Any], data: Dict[str, Any]) -> bool
-  - Finds the first row matching the query, updates the CSV row's relevant columns by stringifying the new values, and writes everything back. Returns True if update applied.
+#### `deleteOne(query: dict) -> bool`
+Delete first matching record.
 
-Storage format
-- Data directory: `lemondb_data/` (created when needed by utils.ensure_data_dir()).
-- CSV file: `<name>.csv` with header row of fields.
-- Metadata file: `<name>_metadata.json`, currently contains {"schema": {..}}.
+```python
+db.deleteOne({"username": "Alice"})  # Returns True if deleted
+```
 
-Concurrency and limitations
-- CSVEngine rewrites the whole CSV file for delete_one and update_one. There is no locking; concurrent access may corrupt files.
-- No transactionality or atomic multi-row operations.
-- Search is full-table scan (reads entire CSV into memory). Not suitable for large datasets.
+**Logs:** `🍋 Deleted 1 record` or `🍋 No records matched`
 
-Module: app.schema
+---
 
-Public symbols: SchemaValidator, SchemaValidationError
+#### `deleteAll()`
+Delete all records.
 
-Purpose
-- Validate schema definitions and incoming records against the schema.
-- Provide a list of allowed primitive types and basic validation.
+```python
+db.deleteAll()
+```
 
-Allowed types
-- "string", "integer", "float", "boolean", "date"
+**Logs:** `🍋 Deleted X record(s) from 'name'`
 
-SchemaValidator class
-- Constructor: SchemaValidator(schema: Dict[str, str])
-  - Stores schema, builds `fields` and `types` lists, and calls `validate_schema()`.
+---
 
-- validate_schema()
-  - Ensures the provided schema is a dict and that every declared type is one of allowed types.
-  - Raises SchemaValidationError on invalid schema.
+#### `updateOne(query: dict, data: dict) -> bool`
+Update first matching record.
 
-- validate_record(record: List | Dict)
-  - Accepts either a dict or list record:
-    - If dict: ensures every key in the dict exists in the schema (extra keys are rejected).
-    - If list: ensures the list length equals the number of schema fields.
-  - Raises SchemaValidationError for invalid records; returns True if OK.
+```python
+db.updateOne({"username": "Alice"}, {"age": 26})
+```
 
-Notes
-- validate_record does not type-check values (e.g., that a value declared as integer is actually an int). The engine's parsing is responsible for converting stored strings back to typed values on read.
+**Logs:** `🍋 Updated 1 record` or `🍋 No records matched`
 
-Module: app.utils
+---
 
-Purpose
-- Small helpers for filesystem paths, metadata I/O, and converting between Python types and string representation for CSV storage.
+#### `count() -> int`
+Count records.
 
-Public functions
-- ensure_data_dir() -> str
-  - Ensures `lemondb_data` directory exists; returns the directory path.
+```python
+total = db.count()
+```
 
-- metadata_path(name: str) -> str
-  - Returns path to metadata JSON for `name` and ensures data directory exists.
+---
 
-- csv_path(name: str) -> str
-  - Returns path to CSV file for `name` and ensures data directory exists.
+#### `test()`
+Test database status.
 
-- write_metadata(name: str, metadata: dict)
-  - Writes JSON metadata pretty-printed (indent=2) to metadata file.
+```python
+db.test()
+# 🍋 DB 'users' is created and working!
+# 🍋 Current records: 5
+# 🍋 Schema fields: username, email, age
+```
 
-- read_metadata(name: str) -> dict
-  - Reads metadata JSON and returns the dict or {} if file is missing.
+---
 
-- stringify(value) -> str
-  - Serializes values to strings for CSV storage:
-    - None -> ""
-    - bool -> "true"/"false"
-    - int/float -> decimal string
-    - datetime/date -> formatted as YYYY-MM-DD
-    - otherwise -> str(value)
+## Examples
 
-- parse_value(value: str, dtype: str) -> Any
-  - Parses a CSV cell string back into a Python value according to dtype:
-    - "" -> None
-    - string -> returned as-is
-    - integer -> int()
-    - float -> float()
-    - boolean -> True for ("1","true","yes","y") (case-insensitive), otherwise False
-    - date -> parsed via datetime.strptime(...).date()
-  - If parsing raises any exception, the raw string is returned as a fallback.
+### Example 1: Simple Todo List
 
-Examples and file contents
+```python
+from app import LemonDB
 
-Given the quickstart above, files created look like:
+schema = {
+    "id": {"type": "integer", "required": True, "unique": True},
+    "task": {"type": "string", "required": True},
+    "done": {"type": "boolean"}
+}
 
-lemondb_data/users_metadata.json
+todos = LemonDB("todos", schema=schema)
+
+# Add tasks
+todos.save(
+    (1, "Buy groceries", False),
+    (2, "Learn Python", False),
+    (3, "Exercise", False)
+)
+
+# Mark as done
+todos.updateOne({"id": 2}, {"done": True})
+
+# Find incomplete
+incomplete = todos.find({"done": False})
+print(f"You have {len(incomplete)} tasks remaining")
+
+# Complete a task
+todos.deleteOne({"id": 1})
+```
+
+### Example 2: Multi-Database Setup
+
+```python
+# User database
+users_db = LemonDB("users", schema={"name": "string", "email": "string"})
+
+# Products in custom location
+products_db = LemonDB(
+    "products",
+    schema={"name": "string", "price": "float", "stock": "integer"},
+    data_dir="./inventory_data"
+)
+
+# Activity logs
+logs_db = LemonDB(
+    "logs",
+    schema={"timestamp": "string", "action": "string"},
+    data_dir="/var/logs/app"
+)
+```
+
+### Example 3: Error Handling
+
+```python
+# Save with error handling
+results = db.save(
+    ("Alice", "alice@test.com"),
+    ("Bob", None),  # Missing required email
+    ("Charlie", "charlie@test.com"),
+    raise_on_error=False
+)
+# Output:
+# Skipping record ('Bob', None): Field 'email' is required
+# 🍋 Saved 2 record(s) to 'users'
+```
+
+---
+
+## Limitations
+
+⚠️ **Not suitable for:**
+- Large datasets (uses full table scans)
+- Concurrent access (no locking mechanism)
+- Production systems (toy database for learning/prototyping)
+
+✅ **Good for:**
+- Small projects & prototypes
+- Configuration storage
+- Simple data persistence
+- Learning database concepts
+
+---
+
+## File Structure
+
+After creating a database:
+
+```
+lemondb_data/
+├── users.csv                  # Data records
+├── users_metadata.json        # Schema definition
+├── products.csv
+└── products_metadata.json
+```
+
+**users.csv:**
+```csv
+username,email,age
+Alice,alice@example.com,25
+Bob,bob@example.com,30
+```
+
+**users_metadata.json:**
+```json
 {
   "schema": {
     "username": "string",
     "email": "string",
-    "age": "integer",
-    "premium": "boolean",
-    "signup_date": "date"
+    "age": "integer"
   }
 }
+```
 
-lemondb_data/users.csv
-username,email,age,premium,signup_date
-Andrea Blinova,adka95652@gmail.com,23,true,2023-08-15
+---
 
-Edge cases and behavior summary
+## Code Improvements
 
-- Empty values: an empty field is stored as an empty string and parsed back as None.
-- Type coercion: parse_value attempts conversion and returns the raw string if conversion fails (so malformed integers remain strings on read).
-- Dict save: passing a dict to LemonDB.save will only save keys that exist in the schema and will preserve field order defined by the schema when converting to a CSV row.
-- Extra keys in dict save: validate_record rejects records that contain unknown keys (SchemaValidationError).
-- Partial rows: if the CSV contains shorter rows than the header, missing columns are treated as empty and parsed to None.
-- Boolean parsing: many common truthy strings map to True; anything else maps to False when dtype is "boolean".
+This version includes several refactorings:
 
-Limitations
+1. **Modular validation** - Separated format checking from constraint validation
+2. **DRY principles** - Reusable query matching across find/delete/update
+3. **Centralized I/O** - Single method for CSV writes
+4. **Logging** - All operations provide feedback with 🍋 icons
+5. **Custom paths** - Flexible storage locations
 
-- Single-engine (CSV) implementation. The code is designed so future engines could be added, but only "csv" is allowed in `LemonDB` currently.
-- No concurrency controls or atomic file writes; not safe for concurrent writers.
-- Full table scans for queries and updates; not appropriate for large datasets.
-- No schema migrations or evolution handling.
+**Total Lines:** 357 (core: 113, engine: 110, schema: 73, utils: 61)
 
-Next steps and suggested improvements
+---
 
-- Add file locking or atomic replace-write (write to temp & rename) to reduce race conditions.
-- Add a context manager or transaction abstraction for atomic multi-step operations.
-- Introduce indexes and incremental reading for large datasets.
-- Add schema type enforcement on write to reject or coerce bad values earlier.
-- Provide an append-only WAL or journaling to improve durability.
+## Running Tests
 
-How to run tests / try the project
-
-- The repository provides `test/run_test.py` demonstrating basic usage. To run it:
 
 ```bash
-python test/run_test.py
+# Test database creation
+python3 -m tests.test_creation
+
+# Test count function
+python3 -m tests.test_count
+
+# Test db.test() method
+python3 -m tests.test_db_test
 ```
 
-- Or import and use from Python:
+---
 
-```python
-from app import LemonDB
-# ...follow quickstart above
+## Running Examples
+
+```bash
+# Save operations
+python3 -m examples.example_save
+
+# Find/query operations
+python3 -m examples.example_find
+
+# Update operations
+python3 -m examples.example_update
+
+# Delete operations
+python3 -m examples.example_delete
+
+# Complete todo app
+python3 -m examples.todo_app
 ```
 
-Requirements coverage
+---
 
-- Docs explain `core` (LemonDB), `engine` (CSVEngine), `schema` (SchemaValidator), and `utils` (I/O and parsing) — Done.
+## Project Structure
 
-If you want, I can also:
-- Generate a shorter Quickstart README or add inline examples to each module file.
-- Add unit tests that assert current behavior (save/find/update/delete) so docs and code remain synchronized.
+```
+lemonDB/
+├── README.md                    # Project readme
+├── docs.md                      # Full documentation (this file)
+├── LICENSE                      # MIT License
+├── setup.py                     # Package setup
+├── requirements.txt             # Dependencies
+├── .gitignore                   # Git ignore rules
+│
+├── app/                         # Main package
+│   ├── __init__.py             # Package init
+│   ├── core.py                 # LemonDB main class
+│   ├── schema.py               # Schema validation
+│   ├── engine.py               # CSV storage engine
+│   └── utils.py                # Helper utilities
+│
+├── tests/                       # Test files
+│   ├── __init__.py
+│   ├── test_creation.py        # Test database creation
+│   ├── test_count.py           # Test count function
+│   └── test_db_test.py         # Test db.test() method
+│
+└── examples/                    # Usage examples
+    ├── example_save.py         # Save operations demo
+    ├── example_find.py         # Query operations demo
+    ├── example_update.py       # Update operations demo
+    ├── example_delete.py       # Delete operations demo
+    └── todo_app.py             # Complete todo application
+```
 
+---
 
+**Made with 🍋 by lemonDB**
