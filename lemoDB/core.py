@@ -153,7 +153,7 @@ class LemonDB:
     def test(self):
         """Test if database is created and working"""
         count = self.count()
-        print(f"{LEMON} DB '{self.name}' is created and working!")
-        print(f"{LEMON} Current records: {count}")
-        print(f"{LEMON} Schema fields: {', '.join(self.validator.fields)}")
+        print(f"{LEMON} DB '{self.name}' is created and working!{LEMON}")
+        print(f"{LEMON} Current records: {count}{LEMON}")
+        print(f"{LEMON} Schema fields: {', '.join(self.validator.fields)}{LEMON}")
         return True
